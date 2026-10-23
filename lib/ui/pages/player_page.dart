@@ -251,7 +251,6 @@ class _PlayerBodyState extends State<_PlayerBody> {
             children: [
               _ArtworkBackground(
                 song: widget.song,
-                isPaused: _page == 1 && !_pageScrolling,
               ),
             SafeArea(
               // 横屏时同样需要处理顶部状态栏和底部系统导航栏（如车机空调控制栏）的遮挡。
@@ -419,34 +418,21 @@ String _lyricDisplayModeLabel(_LyricDisplayMode mode) {
 class _ArtworkBackground extends StatefulWidget {
   const _ArtworkBackground({
     required this.song,
-    this.isPaused = false,
   });
 
   final Song song;
-  final bool isPaused;
 
   @override
   State<_ArtworkBackground> createState() => _ArtworkBackgroundState();
 }
 
-class _ArtworkBackgroundState extends State<_ArtworkBackground>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  late final AnimationController _rotationController;
-
+class _ArtworkBackgroundState extends State<_ArtworkBackground> {
   /// 背景封面：自带封面按 360px 取图；缺封面时由 CoverService 补取后刷新。
   String? _coverUrl;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _rotationController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 40),
-    );
-    if (!widget.isPaused) {
-      _rotationController.repeat();
-    }
     _coverUrl = widget.song.coverUrl;
     unawaited(_resolveCover());
   }
@@ -469,45 +455,12 @@ class _ArtworkBackgroundState extends State<_ArtworkBackground>
       _coverUrl = widget.song.coverUrl;
       unawaited(_resolveCover());
     }
-    if (oldWidget.isPaused != widget.isPaused) {
-      if (widget.isPaused) {
-        if (_rotationController.isAnimating) _rotationController.stop();
-      } else {
-        if (!_rotationController.isAnimating) _rotationController.repeat();
-      }
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.resumed) {
-      if (!widget.isPaused && !_rotationController.isAnimating) {
-        _rotationController.repeat();
-      }
-    } else {
-      if (_rotationController.isAnimating) _rotationController.stop();
-    }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _rotationController.dispose();
-    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final coverUrl = _coverUrl;
-    final size = MediaQuery.sizeOf(context);
-    // 圆形唱片的直径：大于屏幕对角线，转动时任何角度都盖满，不会露出边界
-    final discDim = math.sqrt(
-          size.width * size.width + size.height * size.height,
-        ) *
-        1.05;
 
-    // 旋转动画背景是纯装饰性的，排除语义树防止 Windows AXTree 竞态崩溃，并用 RepaintBoundary 彻底隔离图层
     return RepaintBoundary(
       child: ExcludeSemantics(
         child: Stack(
@@ -516,44 +469,24 @@ class _ArtworkBackgroundState extends State<_ArtworkBackground>
             // 始终显示渐变兜底背景，避免封面加载期间出现纯黑背景
             const _FallbackBackground(),
             if (coverUrl != null)
-              // 做成唱片：封面裁成圆形后整体旋转。圆在任何角度下形状都不变，
-              // 不会像方形那样转出边角和黑边。
-              // 用 OverflowBox 给出宽松约束：否则 SizedBox.square 会被父级
-              // 有限约束压扁，ClipOval 裁出来的就是椭圆（手表上尤其明显）。
               ClipRect(
-                child: RepaintBoundary(
-                  child: OverflowBox(
-                    minWidth: 0,
-                    minHeight: 0,
-                    maxWidth: double.infinity,
-                    maxHeight: double.infinity,
-                    child: RotationTransition(
-                      turns: _rotationController,
-                      child: SizedBox.square(
-                        dimension: discDim,
-                        child: ClipOval(
-                          child: ThemeController.instance.liquidGlassEnabled
-                              ? ImageFiltered(
-                                  imageFilter: ImageFilter.blur(
-                                    sigmaX: 18,
-                                    sigmaY: 18,
-                                  ),
-                                  child: RetryableNetworkImage(
-                                    url: coverUrl,
-                                    cacheWidth: 720,
-                                    cacheHeight: 720,
-                                  ),
-                                )
-                              : RetryableNetworkImage(
-                                  url: coverUrl,
-                                  cacheWidth: 720,
-                                  cacheHeight: 720,
-                                ),
+                child: ThemeController.instance.liquidGlassEnabled
+                    ? ImageFiltered(
+                        imageFilter: ImageFilter.blur(
+                          sigmaX: 18,
+                          sigmaY: 18,
                         ),
+                        child: RetryableNetworkImage(
+                          url: coverUrl,
+                          cacheWidth: 720,
+                          cacheHeight: 720,
+                        ),
+                      )
+                    : RetryableNetworkImage(
+                        url: coverUrl,
+                        cacheWidth: 720,
+                        cacheHeight: 720,
                       ),
-                    ),
-                  ),
-                ),
               ),
             DecoratedBox(
               decoration: BoxDecoration(
