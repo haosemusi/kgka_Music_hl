@@ -40,11 +40,26 @@ class AuthController extends ChangeNotifier {
 
   final Set<String> _likedHashes = {};
 
+  /// 收藏集合是否已就绪：服务端有效收藏列表，或上次同步后的本地快照。
+  bool _likedHashesReady = false;
+
   bool get isLoggedIn => session?.isValid == true;
 
   bool isLiked(Song song) => _likedHashes.contains(song.hash);
 
+  /// 收藏歌曲的 hash，顺序与收藏歌单列表一致。
+  ///
+  /// `_likedHashes` 是插入序集合：服务端同步时按歌单顺序写入，本地快照也按同
+  /// 一顺序恢复，所以这里的顺序可以直接用作收藏页的展示次序。
+  List<String> get likedSongHashes => List.of(_likedHashes);
+
+  /// 收藏歌曲数量。
+  ///
+  /// 以收藏歌单里真正存在的歌曲为准（下架/收藏失败导致 hash 为空的条目不会
+  /// 进入收藏集合），避免比收藏页实际列出的数量偏大；收藏列表尚未同步到位时
+  /// 才退回歌单接口给出的总数。
   int get likedCount {
+    if (_likedHashesReady) return _likedHashes.length;
     final playlist = likedPlaylist;
     if (playlist != null && playlist.songCount != null) {
       return playlist.songCount!;
@@ -371,6 +386,8 @@ class AuthController extends ChangeNotifier {
 
   Future<void> loginWithSession(LoginSession session) async {
     await _run(() async {
+      // 换账号登录时旧收藏集合不可信，先按未就绪处理，等同步覆盖。
+      _likedHashesReady = false;
       this.session = session;
       _api.setSession(session);
 
@@ -431,6 +448,7 @@ class AuthController extends ChangeNotifier {
   }) async {
     PhoneLoginResult? result;
     await _run(() async {
+      _likedHashesReady = false;
       _api.setSession(null);
       result = await _api.loginWithPhone(
         mobile: mobile,
@@ -534,6 +552,7 @@ class AuthController extends ChangeNotifier {
         _likedHashes.add(song.hash);
       }
       await _persistLikedHashes();
+      _likedHashesReady = true;
     } catch (_) {
       await _loadLikedHashes();
     }
@@ -552,6 +571,7 @@ class AuthController extends ChangeNotifier {
       final list = jsonDecode(raw);
       if (list is List) {
         _likedHashes.addAll(list.whereType<String>());
+        _likedHashesReady = true;
       }
     } catch (_) {}
   }
@@ -649,6 +669,7 @@ class AuthController extends ChangeNotifier {
     vipInfo = null;
     playlists = const [];
     _likedHashes.clear();
+    _likedHashesReady = false;
     _api.setSession(null);
     await prefs.remove(_tokenKey);
     await prefs.remove(_t1Key);
