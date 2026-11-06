@@ -10,6 +10,7 @@ import '../../controllers/player_controller.dart';
 import '../../models/music_models.dart';
 import '../../services/music_api.dart';
 import '../widgets/artwork.dart';
+import '../widgets/toast.dart';
 import '../adaptive_layout.dart';
 import '../widgets/liquid_glass_ui.dart';
 import '../widgets/mini_player.dart';
@@ -117,11 +118,18 @@ class _DownloadedList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: downloads,
+      // 收藏顺序变化（新增/取消收藏）需要同步反映到列表次序上。
+      animation: Listenable.merge([downloads, auth]),
       builder: (context, _) {
         final entries = downloads.downloadEntries;
         final completed =
-            entries.where((e) => e.status == DownloadStatus.downloaded).toList();
+            _orderedLikeFavorites(
+              entries.where((e) => e.status == DownloadStatus.downloaded),
+              auth,
+            );
+        // 整页已下载歌曲构成播放队列：点任意一首都会替换掉原有队列，
+        // 不再把之前其他歌单的歌继续排在后面。
+        final playQueue = completed.map((entry) => entry.song).toList();
         final downloading =
             entries.where((e) => e.status == DownloadStatus.downloading).toList();
         final failed =
@@ -158,6 +166,7 @@ class _DownloadedList extends StatelessWidget {
                     auth: auth,
                     player: player,
                     downloads: downloads,
+                    playQueue: playQueue,
                   )),
             ],
             if (downloading.isNotEmpty) ...[
@@ -225,6 +234,7 @@ class _DownloadedSongRow extends StatelessWidget {
     required this.auth,
     required this.player,
     required this.downloads,
+    required this.playQueue,
   });
 
   final DownloadEntry entry;
@@ -232,6 +242,8 @@ class _DownloadedSongRow extends StatelessWidget {
   final AuthController auth;
   final PlayerController player;
   final DownloadController downloads;
+  /// 整页已下载歌曲，点任一首都以它作为播放队列。
+  final List<Song> playQueue;
 
   @override
   Widget build(BuildContext context) {
@@ -262,12 +274,10 @@ class _DownloadedSongRow extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            icon: const Icon(Icons.play_circle_fill_rounded),
-            color: colorScheme.primary,
-            onPressed: () {
-              player.playSong(song);
-            },
+          _FavoriteToggle(
+            auth: auth,
+            song: song,
+            onToggle: () => _toggleLike(song),
           ),
           IconButton(
             icon: const Icon(Icons.more_vert_rounded),
@@ -275,8 +285,27 @@ class _DownloadedSongRow extends StatelessWidget {
           ),
         ],
       ),
-      onTap: () => player.playSong(song),
+      onTap: () => player.playSong(song, queue: List<Song>.of(playQueue)),
     );
+  }
+
+  /// 收藏/取消收藏，行为与云盘页保持一致。
+  Future<void> _toggleLike(Song song) async {
+    if (!auth.isLoggedIn) {
+      Toast.show('请先登录后再收藏');
+      return;
+    }
+    if (auth.likedPlaylist == null) {
+      Toast.error('暂未找到收藏歌单，请稍后重试');
+      return;
+    }
+    final liked = auth.isLiked(song);
+    try {
+      await auth.toggleLike(song);
+      Toast.success(liked ? '已取消收藏' : '已收藏到「收藏」歌单');
+    } catch (error) {
+      Toast.error('收藏失败：$error');
+    }
   }
 
   void _showActions(BuildContext context, Song song) {
@@ -288,6 +317,19 @@ class _DownloadedSongRow extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (song.hash.isNotEmpty)
+              ListTile(
+                leading: Icon(
+                  auth.isLiked(song)
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                ),
+                title: Text(auth.isLiked(song) ? '取消收藏' : '收藏'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _toggleLike(song);
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.delete_outline_rounded),
               title: const Text('删除下载'),
@@ -350,6 +392,43 @@ class _DownloadedSongRow extends StatelessWidget {
         await launchUrl(contentUri, mode: LaunchMode.externalApplication);
       }
     }
+  }
+}
+
+/// 收藏状态按钮：已收藏显示实心，未收藏显示空心。
+class _FavoriteToggle extends StatelessWidget {
+  const _FavoriteToggle({
+    required this.auth,
+    required this.song,
+    required this.onToggle,
+  });
+
+  final AuthController auth;
+  final Song song;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    if (song.hash.isEmpty) return const SizedBox.shrink();
+
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return AnimatedBuilder(
+      animation: auth,
+      builder: (context, _) {
+        final liked = auth.isLiked(song);
+        return IconButton(
+          tooltip: liked ? '取消收藏' : '收藏',
+          onPressed: onToggle,
+          icon: Icon(
+            liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+            color: liked ? Colors.redAccent : colorScheme.outline,
+            size: 24,
+          ),
+          visualDensity: VisualDensity.compact,
+        );
+      },
+    );
   }
 }
 
@@ -566,4 +645,35 @@ String _formatBytes(int bytes) {
   if (bytes < 1024) return '$bytes B';
   if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
   return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
+
+/// 按收藏页的歌曲顺序排列已下载歌曲。
+///
+/// 收藏过的按其在收藏歌单里的位置排列；没收藏过的保持原有次序排在后面，
+/// 收藏列表还没同步时整列维持原样。
+List<DownloadEntry> _orderedLikeFavorites(
+  Iterable<DownloadEntry> entries,
+  AuthController auth,
+) {
+  final likedHashes = auth.likedSongHashes;
+  final list = entries.toList();
+  if (likedHashes.isEmpty || list.length < 2) return list;
+
+  final rank = <String, int>{};
+  for (var i = 0; i < likedHashes.length; i++) {
+    rank.putIfAbsent(likedHashes[i].trim().toLowerCase(), () => i);
+  }
+
+  // 用「排序键 + 原始下标」兜底，List.sort 不保证稳定。
+  final decorated = [
+    for (var i = 0; i < list.length; i++)
+      (
+        key:
+            rank[list[i].song.hash.trim().toLowerCase()] ??
+            likedHashes.length + i,
+        entry: list[i],
+      ),
+  ];
+  decorated.sort((a, b) => a.key.compareTo(b.key));
+  return [for (final item in decorated) item.entry];
 }
