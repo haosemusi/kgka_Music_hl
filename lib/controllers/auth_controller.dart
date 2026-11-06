@@ -47,12 +47,6 @@ class AuthController extends ChangeNotifier {
 
   bool isLiked(Song song) => _likedHashes.contains(song.hash);
 
-  /// 收藏歌曲的 hash，顺序与收藏歌单列表一致。
-  ///
-  /// `_likedHashes` 是插入序集合：服务端同步时按歌单顺序写入，本地快照也按同
-  /// 一顺序恢复，所以这里的顺序可以直接用作收藏页的展示次序。
-  List<String> get likedSongHashes => List.of(_likedHashes);
-
   /// 收藏歌曲数量。
   ///
   /// 以收藏歌单里真正存在的歌曲为准（下架/收藏失败导致 hash 为空的条目不会

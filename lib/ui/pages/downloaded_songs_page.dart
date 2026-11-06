@@ -119,14 +119,12 @@ class _DownloadedList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      // 收藏顺序变化（新增/取消收藏）需要同步反映到列表次序上。
-      animation: Listenable.merge([downloads, auth]),
+      animation: downloads,
       builder: (context, _) {
         final entries = downloads.downloadEntries;
         final completed =
-            _orderedLikeFavorites(
+            _orderByDownloadTime(
               entries.where((e) => e.status == DownloadStatus.downloaded),
-              auth,
             );
         // 整页已下载歌曲构成播放队列：点任意一首都会替换掉原有队列，
         // 不再把之前其他歌单的歌继续排在后面。
@@ -665,57 +663,34 @@ String _formatBytes(int bytes) {
   return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }
 
-/// 已下载歌曲的展示顺序：收藏过的按收藏歌单里的次序排在前面，没收藏的
-/// （云盘歌曲、以及未收藏的普通歌曲）整组排在后面，组内按下载时间由新到旧。
+/// 已下载歌曲的展示顺序：只按下载时间由新到旧，不再参考收藏歌单的次序。
 ///
-/// 收藏列表还没同步时全部按下载时间排列。
-List<DownloadEntry> _orderedLikeFavorites(
-  Iterable<DownloadEntry> entries,
-  AuthController auth,
-) {
-  final likedHashes = auth.likedSongHashes;
+/// 时间相同（或旧索引里没有下载时间）的条目保持原有次序；没有时间的排在最后。
+List<DownloadEntry> _orderByDownloadTime(Iterable<DownloadEntry> entries) {
   final list = entries.toList();
   if (list.length < 2) return list;
-
-  final rank = <String, int>{};
-  for (var i = 0; i < likedHashes.length; i++) {
-    rank.putIfAbsent(likedHashes[i].trim().toLowerCase(), () => i);
-  }
-
-  String keyOf(DownloadEntry entry) =>
-      entry.song.hash.trim().toLowerCase();
-
-  // 未收藏的组内先按下载时间倒序，时间相同（或缺失）保持原有次序。
-  final uncollectedOrder = <String, int>{};
-  final uncollected = [
-    for (var i = 0; i < list.length; i++)
-      if (!rank.containsKey(keyOf(list[i]))) i,
-  ];
-  uncollected.sort((a, b) {
-    final left = list[a].downloadedAt;
-    final right = list[b].downloadedAt;
-    if (left != null && right != null) {
-      final byTime = right.compareTo(left);
-      if (byTime != 0) return byTime;
-    } else if (left == null && right != null) {
-      return 1;
-    } else if (right == null && left != null) {
-      return -1;
-    }
-    return a.compareTo(b);
-  });
-  for (var i = 0; i < uncollected.length; i++) {
-    uncollectedOrder[keyOf(list[uncollected[i]])] = likedHashes.length + i;
-  }
 
   // 排序键唯一，规避 List.sort 不保证稳定的问题。
   final decorated = [
     for (var i = 0; i < list.length; i++)
       (
-        key: rank[keyOf(list[i])] ?? uncollectedOrder[keyOf(list[i])]!,
+        time: list[i].downloadedAt,
+        originalIndex: i,
         entry: list[i],
       ),
   ];
-  decorated.sort((a, b) => a.key.compareTo(b.key));
+  decorated.sort((a, b) {
+    final left = a.time;
+    final right = b.time;
+    if (left != null && right != null) {
+      final byTime = right.compareTo(left);
+      if (byTime != 0) return byTime;
+    } else if (left != null) {
+      return -1;
+    } else if (right != null) {
+      return 1;
+    }
+    return a.originalIndex.compareTo(b.originalIndex);
+  });
   return [for (final item in decorated) item.entry];
 }

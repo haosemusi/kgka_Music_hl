@@ -45,9 +45,6 @@ class _FakeAuth extends AuthController {
   bool isLiked(Song song) => likedOrder.contains(song.hash);
 
   @override
-  List<String> get likedSongHashes => List.of(likedOrder);
-
-  @override
   PlaylistSummary? get likedPlaylist =>
       const PlaylistSummary(id: 'fav', title: '收藏');
 
@@ -206,32 +203,44 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
   });
 
-  testWidgets('已下载列表按收藏页的歌曲顺序展示', (tester) async {
-    const first = Song(
+  testWidgets('已下载列表只按下载时间由新到旧展示，收藏顺序不再影响次序', (tester) async {
+    const earlyFavorited = Song(
       id: '11',
-      title: '收藏第一首',
+      title: '最早下载的收藏歌',
       artist: '歌手',
       hash: 'HASH_FIRST',
     );
-    const second = Song(
+    const latestFavorited = Song(
       id: '12',
-      title: '收藏第二首',
+      title: '最新下载的收藏歌',
       artist: '歌手',
       hash: 'HASH_SECOND',
     );
-    const uncollected = Song(
+    const middleUncollected = Song(
       id: '13',
-      title: '未收藏下载',
+      title: '中间下载的未收藏歌',
       artist: '歌手',
       hash: 'HASH_OTHER',
     );
 
-    // 下载索引里的顺序故意与收藏页相反：未收藏、第二首、第一首。
+    // 时间：08:00 < 09:00 < 10:00；索引顺序与收藏顺序都故意与时间顺序不同。
     SharedPreferences.setMockInitialValues({
       'ka_music_downloads_index': jsonEncode([
-        _downloadIndexItem(uncollected, '/downloads/other.mp3'),
-        _downloadIndexItem(second, '/downloads/second.flac'),
-        _downloadIndexItem(first, '/downloads/first.flac'),
+        _downloadIndexItem(
+          earlyFavorited,
+          '/downloads/first.flac',
+          downloadedAt: '2026-11-06T08:00:00.000',
+        ),
+        _downloadIndexItem(
+          latestFavorited,
+          '/downloads/second.flac',
+          downloadedAt: '2026-11-06T10:00:00.000',
+        ),
+        _downloadIndexItem(
+          middleUncollected,
+          '/downloads/other.mp3',
+          downloadedAt: '2026-11-06T09:00:00.000',
+        ),
       ]),
     });
     final api = MusicApi(
@@ -241,12 +250,13 @@ void main() {
     await orderedDownloads.initialize();
     addTearDown(orderedDownloads.dispose);
 
+    // 收藏顺序是「最早下载」在前，若还按收藏次序排，它会跑到第一行。
     auth.likedOrder.addAll(['HASH_FIRST', 'HASH_SECOND']);
     await _pumpPage(tester, auth, orderedDownloads);
 
     double topOf(String title) => tester.getTopLeft(find.text(title)).dy;
-    expect(topOf('收藏第一首'), lessThan(topOf('收藏第二首')));
-    expect(topOf('收藏第二首'), lessThan(topOf('未收藏下载')));
+    expect(topOf('最新下载的收藏歌'), lessThan(topOf('中间下载的未收藏歌')));
+    expect(topOf('中间下载的未收藏歌'), lessThan(topOf('最早下载的收藏歌')));
   });
 
   testWidgets('点击播放时整页已下载歌曲成为播放队列，其他来源的歌被清掉', (tester) async {
@@ -271,8 +281,16 @@ void main() {
 
     SharedPreferences.setMockInitialValues({
       'ka_music_downloads_index': jsonEncode([
-        _downloadIndexItem(second, '/downloads/second.flac'),
-        _downloadIndexItem(first, '/downloads/first.flac'),
+        _downloadIndexItem(
+          second,
+          '/downloads/second.flac',
+          downloadedAt: '2026-11-06T10:00:00.000',
+        ),
+        _downloadIndexItem(
+          first,
+          '/downloads/first.flac',
+          downloadedAt: '2026-11-06T08:00:00.000',
+        ),
       ]),
     });
     final api = MusicApi(
@@ -287,9 +305,6 @@ void main() {
     // 进页面前正在播别的歌单。
     player.queue = const [foreign];
 
-    // 收藏顺序：第一首、第二首，与下载索引次序相反。
-    auth.likedOrder.addAll(['QUEUE_FIRST', 'QUEUE_SECOND']);
-
     await _pumpPage(tester, auth, queueDownloads, player: player);
 
     await tester.tap(find.text('队列第二首'));
@@ -298,7 +313,7 @@ void main() {
     expect(player.lastSong?.hash, second.hash);
     expect(
       player.lastQueue.map((song) => song.hash).toList(),
-      [first.hash, second.hash],
+      [second.hash, first.hash],
     );
     expect(player.queue.any((song) => song.hash == foreign.hash), isFalse);
   });
@@ -375,61 +390,6 @@ void main() {
     expect(find.byIcon(Icons.favorite_rounded), findsNothing);
     // 播放与「更多」入口仍在。
     expect(find.byIcon(Icons.more_vert_rounded), findsOneWidget);
-  });
-
-  testWidgets('未收藏的下载歌曲按下载时间由新到旧排在后面', (tester) async {
-    const early = Song(
-      id: '41',
-      title: '最早下载',
-      artist: '歌手',
-      hash: 'HASH_EARLY',
-    );
-    const middle = Song(
-      id: '42',
-      title: '中间下载',
-      artist: '歌手',
-      hash: 'HASH_MIDDLE',
-    );
-    const latest = Song(
-      id: '43',
-      title: '最新下载',
-      artist: '歌手',
-      hash: 'HASH_LATEST',
-    );
-    SharedPreferences.setMockInitialValues({
-      'ka_music_downloads_index': jsonEncode([
-        // 索引里的次序是旧到新，展示应反过来。
-        _downloadIndexItem(
-          early,
-          '/downloads/early.flac',
-          downloadedAt: '2026-11-01T08:00:00.000',
-        ),
-        _downloadIndexItem(
-          middle,
-          '/downloads/middle.flac',
-          downloadedAt: '2026-11-03T08:00:00.000',
-        ),
-        _downloadIndexItem(
-          latest,
-          '/downloads/latest.flac',
-          downloadedAt: '2026-11-06T08:00:00.000',
-        ),
-      ]),
-    });
-    final api = MusicApi(
-      ApiClient(client: MockClient((_) async => http.Response('{}', 200))),
-    );
-    final timedDownloads = DownloadController(_NoopDownloadService(), api);
-    await timedDownloads.initialize();
-    addTearDown(timedDownloads.dispose);
-
-    // 只收藏其中一首：它按收藏次序置顶，其余两首按下载时间排在后面。
-    auth.likedOrder.add('HASH_MIDDLE');
-    await _pumpPage(tester, auth, timedDownloads);
-
-    double topOf(String title) => tester.getTopLeft(find.text(title)).dy;
-    expect(topOf('中间下载'), lessThan(topOf('最新下载')));
-    expect(topOf('最新下载'), lessThan(topOf('最早下载')));
   });
 
   testWidgets('播放中迷你播放器不占满整屏，列表底部不会多出大片空白', (tester) async {
