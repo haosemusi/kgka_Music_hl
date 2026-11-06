@@ -16,6 +16,7 @@ import 'package:kgka_music_hl/services/music_api.dart';
 import 'package:kgka_music_hl/services/music_audio_handler.dart';
 import 'package:kgka_music_hl/controllers/theme_controller.dart';
 import 'package:kgka_music_hl/ui/pages/downloaded_songs_page.dart';
+import 'package:kgka_music_hl/ui/widgets/mini_player.dart';
 import 'package:kgka_music_hl/ui/widgets/toast.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -34,6 +35,8 @@ class _FakeAuth extends AuthController {
   final List<String> likedOrder = [];
   final List<Song> toggledSongs = [];
   bool loggedIn = true;
+  /// false 模拟服务端收下请求但没落库（云盘曲目的典型表现）。
+  bool likeSucceeds = true;
 
   @override
   bool get isLoggedIn => loggedIn;
@@ -49,12 +52,14 @@ class _FakeAuth extends AuthController {
       const PlaylistSummary(id: 'fav', title: '收藏');
 
   @override
-  Future<void> toggleLike(Song song) async {
+  Future<bool> toggleLike(Song song) async {
     toggledSongs.add(song);
+    if (!likeSucceeds) return false;
     if (!likedOrder.remove(song.hash)) {
       likedOrder.add(song.hash);
     }
     notifyListeners();
+    return true;
   }
 }
 
@@ -63,11 +68,15 @@ class _NoopDownloadService extends DownloadService {
   Future<int> fileSize(String path) async => 1024;
 }
 
-Map<String, dynamic> _downloadIndexItem(Song song, String path) => {
+Map<String, dynamic> _downloadIndexItem(
+  Song song,
+  String path, {
+  String downloadedAt = '2026-11-06T12:00:00.000',
+}) => {
   'song': song.toCache(),
   'quality': AudioQuality.lossless.apiValue,
   'filePath': path,
-  'downloadedAt': '2026-11-06T12:00:00.000',
+  'downloadedAt': downloadedAt,
 };
 
 Future<void> _pumpPage(
@@ -305,5 +314,126 @@ void main() {
     expect(find.text('请先登录后再收藏'), findsOneWidget);
 
     await tester.pump(const Duration(seconds: 3));
+  });
+
+  testWidgets('服务端未落库时收藏按钮保持空心并说明原因', (tester) async {
+    const cloudSong = Song(
+      id: '31',
+      title: '云盘下载的歌',
+      artist: '歌手',
+      hash: 'HASH_CLOUD',
+      isCloudDrive: true,
+    );
+    SharedPreferences.setMockInitialValues({
+      'ka_music_downloads_index': jsonEncode([
+        _downloadIndexItem(cloudSong, '/downloads/cloud.mp3'),
+      ]),
+    });
+    final api = MusicApi(
+      ApiClient(client: MockClient((_) async => http.Response('{}', 200))),
+    );
+    final cloudDownloads = DownloadController(_NoopDownloadService(), api);
+    await cloudDownloads.initialize();
+    addTearDown(cloudDownloads.dispose);
+
+    auth.likeSucceeds = false;
+    await _pumpPage(tester, auth, cloudDownloads);
+
+    await tester.tap(find.byIcon(Icons.favorite_border_rounded));
+    await tester.pump();
+
+    expect(
+      find.text('云盘歌曲暂时不支持收藏到「收藏」歌单'),
+      findsOneWidget,
+    );
+    expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.favorite_rounded), findsNothing);
+
+    await tester.pump(const Duration(seconds: 3));
+  });
+
+  testWidgets('未收藏的下载歌曲按下载时间由新到旧排在后面', (tester) async {
+    const early = Song(
+      id: '41',
+      title: '最早下载',
+      artist: '歌手',
+      hash: 'HASH_EARLY',
+    );
+    const middle = Song(
+      id: '42',
+      title: '中间下载',
+      artist: '歌手',
+      hash: 'HASH_MIDDLE',
+    );
+    const latest = Song(
+      id: '43',
+      title: '最新下载',
+      artist: '歌手',
+      hash: 'HASH_LATEST',
+    );
+    SharedPreferences.setMockInitialValues({
+      'ka_music_downloads_index': jsonEncode([
+        // 索引里的次序是旧到新，展示应反过来。
+        _downloadIndexItem(
+          early,
+          '/downloads/early.flac',
+          downloadedAt: '2026-11-01T08:00:00.000',
+        ),
+        _downloadIndexItem(
+          middle,
+          '/downloads/middle.flac',
+          downloadedAt: '2026-11-03T08:00:00.000',
+        ),
+        _downloadIndexItem(
+          latest,
+          '/downloads/latest.flac',
+          downloadedAt: '2026-11-06T08:00:00.000',
+        ),
+      ]),
+    });
+    final api = MusicApi(
+      ApiClient(client: MockClient((_) async => http.Response('{}', 200))),
+    );
+    final timedDownloads = DownloadController(_NoopDownloadService(), api);
+    await timedDownloads.initialize();
+    addTearDown(timedDownloads.dispose);
+
+    // 只收藏其中一首：它按收藏次序置顶，其余两首按下载时间排在后面。
+    auth.likedOrder.add('HASH_MIDDLE');
+    await _pumpPage(tester, auth, timedDownloads);
+
+    double topOf(String title) => tester.getTopLeft(find.text(title)).dy;
+    expect(topOf('中间下载'), lessThan(topOf('最新下载')));
+    expect(topOf('最新下载'), lessThan(topOf('最早下载')));
+  });
+
+  testWidgets('播放中迷你播放器不占满整屏，列表底部不会多出大片空白', (tester) async {
+    tester.view.physicalSize = const Size(1170, 2532);
+    tester.view.devicePixelRatio = 3.0;
+    tester.view.padding = const FakeViewPadding(bottom: 102, top: 141);
+    addTearDown(tester.view.reset);
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final api = MusicApi(
+      ApiClient(client: MockClient((_) async => http.Response('{}', 200))),
+    );
+    final player = PlayerController(api, MusicAudioHandler());
+    player.currentSong = _downloadedSong;
+
+    await _pumpPage(tester, auth, downloads, player: player);
+
+    expect(tester.getSize(find.byType(MiniPlayer)).height, lessThan(120));
+    var maxBottomInset = 0.0;
+    for (final sliver in tester.widgetList<SliverPadding>(
+      find.byType(SliverPadding),
+    )) {
+      final padding = sliver.padding;
+      if (padding is EdgeInsets && padding.bottom > maxBottomInset) {
+        maxBottomInset = padding.bottom;
+      }
+    }
+    // 修复前这里会拿到整屏高度（800+），列表末尾因此出现一大片空白。
+    expect(maxBottomInset, lessThan(160));
   });
 }

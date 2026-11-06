@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../controllers/auth_controller.dart';
 import '../../controllers/download_controller.dart';
 import '../../controllers/player_controller.dart';
+import '../../core/api_client.dart';
 import '../../models/music_models.dart';
 import '../../services/music_api.dart';
 import '../widgets/artwork.dart';
@@ -301,10 +302,25 @@ class _DownloadedSongRow extends StatelessWidget {
     }
     final liked = auth.isLiked(song);
     try {
-      await auth.toggleLike(song);
+      final done = await auth.toggleLike(song);
+      if (!done) {
+        // 服务端没把这首歌真正写进收藏歌单（云盘曲目常见），不点亮本地图标。
+        Toast.error(
+          song.isCloudDrive
+              ? '云盘歌曲暂时不支持收藏到「收藏」歌单'
+              : '收藏未生效，请稍后重试',
+        );
+        return;
+      }
       Toast.success(liked ? '已取消收藏' : '已收藏到「收藏」歌单');
     } catch (error) {
-      Toast.error('收藏失败：$error');
+      // ApiException 自带可读文案；其余异常统一成通用提示，避免把
+      // "Bad state:"、"Exception:" 这类前缀直接甩给用户。
+      Toast.error(
+        error is ApiException
+            ? '收藏失败：${error.message}'
+            : '收藏失败，请稍后重试',
+      );
     }
   }
 
@@ -647,30 +663,54 @@ String _formatBytes(int bytes) {
   return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }
 
-/// 按收藏页的歌曲顺序排列已下载歌曲。
+/// 已下载歌曲的展示顺序：收藏过的按收藏歌单里的次序排在前面，没收藏的
+/// （云盘歌曲、以及未收藏的普通歌曲）整组排在后面，组内按下载时间由新到旧。
 ///
-/// 收藏过的按其在收藏歌单里的位置排列；没收藏过的保持原有次序排在后面，
-/// 收藏列表还没同步时整列维持原样。
+/// 收藏列表还没同步时全部按下载时间排列。
 List<DownloadEntry> _orderedLikeFavorites(
   Iterable<DownloadEntry> entries,
   AuthController auth,
 ) {
   final likedHashes = auth.likedSongHashes;
   final list = entries.toList();
-  if (likedHashes.isEmpty || list.length < 2) return list;
+  if (list.length < 2) return list;
 
   final rank = <String, int>{};
   for (var i = 0; i < likedHashes.length; i++) {
     rank.putIfAbsent(likedHashes[i].trim().toLowerCase(), () => i);
   }
 
-  // 用「排序键 + 原始下标」兜底，List.sort 不保证稳定。
+  String keyOf(DownloadEntry entry) =>
+      entry.song.hash.trim().toLowerCase();
+
+  // 未收藏的组内先按下载时间倒序，时间相同（或缺失）保持原有次序。
+  final uncollectedOrder = <String, int>{};
+  final uncollected = [
+    for (var i = 0; i < list.length; i++)
+      if (!rank.containsKey(keyOf(list[i]))) i,
+  ];
+  uncollected.sort((a, b) {
+    final left = list[a].downloadedAt;
+    final right = list[b].downloadedAt;
+    if (left != null && right != null) {
+      final byTime = right.compareTo(left);
+      if (byTime != 0) return byTime;
+    } else if (left == null && right != null) {
+      return 1;
+    } else if (right == null && left != null) {
+      return -1;
+    }
+    return a.compareTo(b);
+  });
+  for (var i = 0; i < uncollected.length; i++) {
+    uncollectedOrder[keyOf(list[uncollected[i]])] = likedHashes.length + i;
+  }
+
+  // 排序键唯一，规避 List.sort 不保证稳定的问题。
   final decorated = [
     for (var i = 0; i < list.length; i++)
       (
-        key:
-            rank[list[i].song.hash.trim().toLowerCase()] ??
-            likedHashes.length + i,
+        key: rank[keyOf(list[i])] ?? uncollectedOrder[keyOf(list[i])]!,
         entry: list[i],
       ),
   ];
