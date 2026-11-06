@@ -275,11 +275,13 @@ class _DownloadedSongRow extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _FavoriteToggle(
-            auth: auth,
-            song: song,
-            onToggle: () => _toggleLike(song),
-          ),
+          // 云盘曲目不能收藏到「收藏」歌单（服务端不接受），这里不给收藏入口。
+          if (!song.isCloudDrive)
+            _FavoriteToggle(
+              auth: auth,
+              song: song,
+              onToggle: () => _toggleLike(song),
+            ),
           IconButton(
             icon: const Icon(Icons.more_vert_rounded),
             onPressed: () => _showActions(context, song),
@@ -333,7 +335,7 @@ class _DownloadedSongRow extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (song.hash.isNotEmpty)
+            if (song.hash.isNotEmpty && !song.isCloudDrive)
               ListTile(
                 leading: Icon(
                   auth.isLiked(song)

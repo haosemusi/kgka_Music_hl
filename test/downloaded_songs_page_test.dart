@@ -317,16 +317,15 @@ void main() {
   });
 
   testWidgets('服务端未落库时收藏按钮保持空心并说明原因', (tester) async {
-    const cloudSong = Song(
+    const plainSong = Song(
       id: '31',
-      title: '云盘下载的歌',
+      title: '普通下载的歌',
       artist: '歌手',
-      hash: 'HASH_CLOUD',
-      isCloudDrive: true,
+      hash: 'HASH_PLAIN',
     );
     SharedPreferences.setMockInitialValues({
       'ka_music_downloads_index': jsonEncode([
-        _downloadIndexItem(cloudSong, '/downloads/cloud.mp3'),
+        _downloadIndexItem(plainSong, '/downloads/plain.flac'),
       ]),
     });
     final api = MusicApi(
@@ -342,14 +341,40 @@ void main() {
     await tester.tap(find.byIcon(Icons.favorite_border_rounded));
     await tester.pump();
 
-    expect(
-      find.text('云盘歌曲暂时不支持收藏到「收藏」歌单'),
-      findsOneWidget,
-    );
+    expect(find.text('收藏未生效，请稍后重试'), findsOneWidget);
     expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
     expect(find.byIcon(Icons.favorite_rounded), findsNothing);
 
     await tester.pump(const Duration(seconds: 3));
+  });
+
+  testWidgets('云盘歌曲不展示收藏入口', (tester) async {
+    const cloudSong = Song(
+      id: '32',
+      title: '云盘下载的歌',
+      artist: '歌手',
+      hash: 'HASH_CLOUD',
+      albumAudioId: '0',
+      isCloudDrive: true,
+    );
+    SharedPreferences.setMockInitialValues({
+      'ka_music_downloads_index': jsonEncode([
+        _downloadIndexItem(cloudSong, '/downloads/cloud.mp3'),
+      ]),
+    });
+    final api = MusicApi(
+      ApiClient(client: MockClient((_) async => http.Response('{}', 200))),
+    );
+    final cloudDownloads = DownloadController(_NoopDownloadService(), api);
+    await cloudDownloads.initialize();
+    addTearDown(cloudDownloads.dispose);
+
+    await _pumpPage(tester, auth, cloudDownloads);
+
+    expect(find.byIcon(Icons.favorite_border_rounded), findsNothing);
+    expect(find.byIcon(Icons.favorite_rounded), findsNothing);
+    // 播放与「更多」入口仍在。
+    expect(find.byIcon(Icons.more_vert_rounded), findsOneWidget);
   });
 
   testWidgets('未收藏的下载歌曲按下载时间由新到旧排在后面', (tester) async {

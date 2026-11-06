@@ -21,6 +21,7 @@ import '../widgets/song_artwork.dart';
 import '../widgets/import_playlist_sheet.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/now_playing_badge.dart';
+import '../widgets/downloaded_indicator.dart';
 import '../widgets/song_action_sheets.dart';
 import '../widgets/toast.dart';
 import '../widgets/marquee_text.dart';
@@ -2151,7 +2152,7 @@ class _SongRow extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(width: 6),
-                            _DownloadedIndicator(
+                            DownloadedIndicator(
                               player: player,
                               song: song,
                               // 多选模式下点击整行用于勾选，绿色勾不再单独响应。
@@ -2234,53 +2235,6 @@ class _SongRow extends StatelessWidget {
           );
         },
       ),
-    );
-  }
-}
-
-class _DownloadedIndicator extends StatelessWidget {
-  const _DownloadedIndicator({
-    required this.player,
-    required this.song,
-    this.interactive = true,
-  });
-
-  final PlayerController player;
-  final Song song;
-  final bool interactive;
-
-  @override
-  Widget build(BuildContext context) {
-    final downloads = player.downloadController;
-    if (downloads == null) return const SizedBox.shrink();
-
-    return AnimatedBuilder(
-      animation: downloads,
-      builder: (context, _) {
-        if (!downloads.isDownloaded(song)) {
-          return const SizedBox.shrink();
-        }
-        const badge = SizedBox.square(
-          dimension: 16,
-          child: Icon(
-            Icons.check_rounded,
-            size: 12,
-            color: Color(0xFF24C768),
-          ),
-        );
-        final circle = Material(
-          color: const Color(0x1A24C768),
-          shape: const CircleBorder(),
-          child: interactive
-              ? InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: () => Toast.info('已下载，播放时将优先使用本地文件'),
-                  child: badge,
-                )
-              : badge,
-        );
-        return Tooltip(message: '已下载', child: circle);
-      },
     );
   }
 }
