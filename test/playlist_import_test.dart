@@ -67,10 +67,11 @@ class ImportApi extends MusicApi {
     int pageSize = 30,
   }) async => delayedSearch ?? candidates;
   @override
-  Future<void> addSongsToPlaylist(String listId, List<Song> songs) async {
+  Future<List<String>?> addSongsToPlaylist(String listId, List<Song> songs) async {
     if (failAdd) throw StateError('write failed');
     requestedListIds.add(listId);
     added.addAll(songs);
+    return songs.map((song) => song.hash.toLowerCase()).toList();
   }
 
   @override

@@ -990,17 +990,31 @@ class MusicApi {
     await _client.post('/playlist/del', query: {'listid': listId});
   }
 
-  Future<void> addToPlaylist(String listId, Song song) async {
-    await addSongsToPlaylist(listId, [song]);
-  }
+  /// 添加歌曲到歌单，返回服务端确认落库的 hash 列表（见 [addSongsToPlaylist]）。
+  Future<List<String>?> addToPlaylist(String listId, Song song) async =>
+      addSongsToPlaylist(listId, [song]);
 
-  Future<void> addSongsToPlaylist(String listId, List<Song> songs) async {
-    if (songs.isEmpty) return;
+  /// 添加歌曲到歌单。
+  ///
+  /// 返回响应 `info` 里确认添加成功的 hash 列表；响应没有 `info` 字段时返回
+  /// null，表示无法核对（调用方按成功处理），避免响应结构差异造成误判。
+  Future<List<String>?> addSongsToPlaylist(String listId, List<Song> songs) async {
+    if (songs.isEmpty) return const [];
     final result = await _client.post(
       '/playlist/tracks/add',
       body: {'listId': listId, 'songs': songs.map(_songAddPayload).toList()},
     );
     _checkPlaylistMutation(result);
+    final json = asMap(result);
+    // 响应结构里没有 info 字段时返回 null（无法核对，按成功处理）；
+    // 有 info 但是空数组，说明确切一首都没落库，要如实返回空列表。
+    if (!json.containsKey('info')) return null;
+    final info = asList(json['info']);
+    return info
+        .whereType<Map<String, dynamic>>()
+        .map((item) => (asString(item['hash']) ?? '').trim().toLowerCase())
+        .where((hash) => hash.isNotEmpty)
+        .toList();
   }
 
   void _checkPlaylistMutation(dynamic result) {
@@ -1031,9 +1045,19 @@ class MusicApi {
     return {
       'name': song.title,
       'hash': song.hash,
-      'albumId': song.albumId,
-      'mixSongId': song.albumAudioId ?? song.id,
+      'albumId': _usableId(song.albumId),
+      // 云盘曲目的 album_audio_id 常常是 0，直接当作 mixSongId 提交会让服务端
+      // 添加失败（表现为「收藏没反应」）；这种情况回落到它自身的 audio_id。
+      'mixSongId': _usableId(song.albumAudioId) ?? _usableId(song.id),
     };
+  }
+
+  /// 过滤掉空串与 0 这类占位 ID。
+  String? _usableId(String? value) {
+    final text = value?.trim();
+    if (text == null || text.isEmpty) return null;
+    if (int.tryParse(text) == 0) return null;
+    return text;
   }
 
   bool _isSuccess(Map<String, dynamic> json) {

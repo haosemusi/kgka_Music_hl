@@ -67,9 +67,14 @@ class AuthController extends ChangeNotifier {
     return _likedHashes.length;
   }
 
-  Future<void> toggleLike(Song song) async {
+  /// 收藏或取消收藏当前歌曲。
+  ///
+  /// 返回 true 表示收藏状态已与服务端一致；返回 false 表示这次没能真正落库
+  /// （云盘曲目常见：接口收下但不把它写进「收藏」歌单），调用方据此提示用户，
+  /// 避免出现"本地点亮了、歌单里却没有"。网络等异常照常向上抛出。
+  Future<bool> toggleLike(Song song) async {
     final playlist = likedPlaylist;
-    if (playlist == null) return;
+    if (playlist == null) return false;
 
     final liked = _likedHashes.contains(song.hash);
     final targetListId = playlist.listId?.isNotEmpty == true
@@ -85,10 +90,24 @@ class AuthController extends ChangeNotifier {
           targetListId,
           song,
         );
+        if (playlistSong == null) {
+          // 收藏列表里已经没有这首歌（下架、或当初就没真正加入）：
+          // 清掉本地标记即可，不该把"找不到"当成一次失败弹给用户的 Bad state。
+          _likedHashes.remove(song.hash);
+          await _persistLikedHashes();
+          notifyListeners();
+          return true;
+        }
         await _api.removeFromPlaylist(targetListId, playlistSong);
         _likedHashes.remove(song.hash);
       } else {
-        await _api.addToPlaylist(targetListId, song);
+        final added = await _api.addToPlaylist(targetListId, song);
+        // 服务端会回传真正落库的曲目；没落库就不能把本地标记点亮，
+        // 否则下一次取消会因为在收藏列表里找不到它而报错。
+        if (added != null &&
+            !added.contains(song.hash.trim().toLowerCase())) {
+          return false;
+        }
         _likedHashes.add(song.hash);
       }
       await _invalidatePlaylistDetailCache(playlist);
@@ -103,9 +122,14 @@ class AuthController extends ChangeNotifier {
       }
       rethrow;
     }
+    return true;
   }
 
-  Future<Song> _resolveLikedSongForRemoval(
+  /// 在收藏歌单里找到与 [sourceSong] 对应的条目（用于按 fileid 删除）。
+  ///
+  /// 返回 null 表示收藏列表成功拉到但里面没有这首歌；列表完全拉不到时抛出
+  /// [ApiException]，让调用方按"操作失败"处理，而不是误判成已移除。
+  Future<Song?> _resolveLikedSongForRemoval(
     PlaylistSummary playlist,
     String targetListId,
     Song sourceSong,
@@ -114,9 +138,11 @@ class AuthController extends ChangeNotifier {
     final ids = <String>{playlist.id, targetListId}
       ..removeWhere((id) => id.isEmpty);
 
+    var fetchedAny = false;
     for (final id in ids) {
       try {
         final songs = await _api.playlistSongs(id, fetchAll: true);
+        fetchedAny = true;
         for (final song in songs) {
           final sameHash = sourceHash.isNotEmpty &&
               song.hash.trim().toLowerCase() == sourceHash;
@@ -131,7 +157,10 @@ class AuthController extends ChangeNotifier {
       }
     }
 
-    throw StateError('未找到收藏歌单中的歌曲，请刷新收藏列表后重试');
+    if (!fetchedAny) {
+      throw ApiException('收藏列表读取失败，请稍后重试');
+    }
+    return null;
   }
 
   Future<void> _invalidatePlaylistDetailCache(PlaylistSummary playlist) async {
