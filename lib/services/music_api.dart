@@ -936,12 +936,19 @@ class MusicApi {
     final json = asMap(
       await _client.get('/user/cloud/url', {
         'hash': song.hash,
-        'album_audio_id': song.albumAudioId,
-        'audio_id': song.albumAudioId,
+        // 云盘条目的 audio_id 就是歌曲自身的 id；album_audio_id 经常是占位 0，
+        // 两个参数都拿 albumAudioId 顶上去会让服务端解析不到文件。
+        // 空值由 AppConfig.apiUri 统一丢弃，不会发出去。
+        'album_audio_id': _usableNumericId(song.albumAudioId),
+        'audio_id':
+            _usableNumericId(song.id) ??
+            _usableNumericId(song.albumAudioId),
         'name': song.title,
       }),
     );
-    final url = asString(json['url']) ?? '';
+    // 主地址为空时退回备用地址（接口文档里 url 与 backup_url 同级）。
+    final url =
+        asString(json['url']) ?? asString(json['backup_url']) ?? '';
     final hash = asString(json['hash']) ?? song.hash;
     return PlayUrl(url: url, hash: hash);
   }
@@ -1058,6 +1065,14 @@ class MusicApi {
     if (text == null || text.isEmpty) return null;
     if (int.tryParse(text) == 0) return null;
     return text;
+  }
+
+  /// 只保留真正可用的数字 ID：hash 冒充的 ID 与占位 0 都要丢弃。
+  String? _usableNumericId(String? value) {
+    final text = _usableId(value);
+    if (text == null) return null;
+    final parsed = int.tryParse(text);
+    return parsed == null ? null : text;
   }
 
   bool _isSuccess(Map<String, dynamic> json) {

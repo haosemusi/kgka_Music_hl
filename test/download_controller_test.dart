@@ -145,12 +145,14 @@ void main() {
   test('云盘歌曲用云盘接口取下载地址并保留真实扩展名', () async {
     SharedPreferences.setMockInitialValues({});
     final requestedPaths = <String>[];
+    Map<String, String>? cloudQuery;
     final api = MusicApi(
       ApiClient(
         client: MockClient((request) async {
           final path = request.url.path;
           requestedPaths.add(path);
           if (path.endsWith('/user/cloud/url')) {
+            cloudQuery = request.url.queryParameters;
             return jsonResponse({
               'url': 'https://cdn.example.com/audio/歌手-云盘歌曲.mp3?sign=abc',
               'hash': 'CLOUD_HASH',
@@ -163,9 +165,10 @@ void main() {
     final service = _CapturingDownloadService('/downloads/歌手-云盘歌曲.mp3');
     final controller = DownloadController(service, api);
     const cloudSong = Song(
-      id: '7',
+      id: '778899',
       title: '云盘歌曲',
       artist: '歌手',
+      albumAudioId: '0',
       hash: 'CLOUD_HASH',
       isCloudDrive: true,
     );
@@ -182,10 +185,72 @@ void main() {
       requestedPaths.any((path) => path.endsWith('/user/cloud/url')),
       isTrue,
     );
+    // audio_id 必须是云盘条目自身的 id，占位 0 的 album_audio_id 不能发出去。
+    expect(cloudQuery?['audio_id'], '778899');
+    expect(cloudQuery?.containsKey('album_audio_id'), isFalse);
     expect(service.requestedUrl, endsWith('.mp3?sign=abc'));
     expect(service.fileExtension, 'mp3');
     expect(service.fileName, '歌手-云盘歌曲.mp3');
     expect(controller.isDownloaded(cloudSong), isTrue);
+  });
+
+  test('云盘主地址为空时用备用地址，备用也没有才回退普通取址', () async {
+    SharedPreferences.setMockInitialValues({});
+    for (final primary in ['backup', 'fallback']) {
+      final requestedPaths = <String>[];
+      final api = MusicApi(
+        ApiClient(
+          client: MockClient((request) async {
+            final path = request.url.path;
+            requestedPaths.add(path);
+            if (path.endsWith('/user/cloud/url')) {
+              return jsonResponse(
+                primary == 'backup'
+                    ? {
+                        'url': '',
+                        'backup_url': 'https://cdn.example.com/b/云盘.mp3',
+                        'hash': 'CLOUD_HASH',
+                      }
+                    : {'url': '', 'hash': 'CLOUD_HASH'},
+              );
+            }
+            if (path.endsWith('/song/url')) {
+              return jsonResponse({
+                'url': ['https://cdn.example.com/a/云盘.mp3'],
+                'hash': 'CLOUD_HASH',
+              });
+            }
+            return jsonResponse({});
+          }),
+        ),
+      );
+      final service = _CapturingDownloadService('/downloads/cloud-$primary.mp3');
+      final controller = DownloadController(service, api);
+      const song = Song(
+        id: '1234',
+        title: '云盘歌曲',
+        artist: '歌手',
+        hash: 'CLOUD_HASH',
+        isCloudDrive: true,
+      );
+
+      await controller.download(song, AudioQuality.lossless);
+
+      if (primary == 'backup') {
+        expect(service.requestedUrl, startsWith('https://cdn.example.com/b/'));
+        expect(
+          requestedPaths.where((path) => path.endsWith('/song/url')),
+          isEmpty,
+        );
+      } else {
+        expect(service.requestedUrl, startsWith('https://cdn.example.com/a/'));
+        expect(
+          requestedPaths.any((path) => path.endsWith('/song/url')),
+          isTrue,
+        );
+      }
+      expect(controller.isDownloaded(song), isTrue);
+    }
   });
 
   test('普通歌曲仍按当前音质解析并且不覆盖扩展名', () async {

@@ -373,7 +373,11 @@ class DownloadController extends ChangeNotifier {
     try {
       final playUrl = await _resolveDownloadUrl(song, quality);
       if (playUrl.url.isEmpty) {
-        throw Exception('这首歌暂时没有可播放地址');
+        throw Exception(
+          song.isCloudDrive
+              ? '云盘地址解析失败（服务端未返回下载地址）'
+              : '这首歌暂时没有可播放地址',
+        );
       }
       await _transfer(
         song,
@@ -435,7 +439,9 @@ class DownloadController extends ChangeNotifier {
               song: song,
               quality: quality,
               status: DownloadStatus.failed,
-              error: '这首歌暂时没有可播放地址',
+              error: song.isCloudDrive
+                  ? '云盘地址解析失败（服务端未返回下载地址）'
+                  : '这首歌暂时没有可播放地址',
             );
             notifyListeners();
             failed++;
@@ -523,10 +529,18 @@ class DownloadController extends ChangeNotifier {
   /// 云盘歌曲只能由 `/user/cloud/url` 取址，和 [PlayerController] 播放时的
   /// 解析口径保持一致；用普通 `/song/url` 查云盘曲目会返回空地址，
   /// 表现为「云盘歌曲无法下载」。
-  Future<PlayUrl> _resolveDownloadUrl(Song song, AudioQuality quality) {
-    return song.isCloudDrive
-        ? _api.cloudSongUrl(song)
-        : _api.songUrl(song, quality: quality);
+  Future<PlayUrl> _resolveDownloadUrl(Song song, AudioQuality quality) async {
+    if (!song.isCloudDrive) {
+      return _api.songUrl(song, quality: quality);
+    }
+    final cloud = await _api.cloudSongUrl(song);
+    if (cloud.url.isNotEmpty) return cloud;
+    // 个别云盘条目在云盘接口上解析不到地址，回退普通取址再试一次。
+    try {
+      return await _api.songUrl(song, quality: quality);
+    } catch (_) {
+      return cloud;
+    }
   }
 
   /// 云盘文件的实际格式由用户上传的文件决定，取地址里的扩展名落盘；
