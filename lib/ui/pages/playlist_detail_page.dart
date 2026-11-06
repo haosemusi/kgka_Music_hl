@@ -854,6 +854,16 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     return widget.auth.findUserPlaylist(_currentPlaylist) ?? _currentPlaylist;
   }
 
+  /// 收藏歌单展示的歌曲数：以收藏集合里真实存在的歌曲为准。
+  ///
+  /// 歌单接口的总数会把收藏失败、已下架（hash 为空）的条目也算进去，
+  /// 那样会大于本页列表实际列出的数量，也和「我的」页对不上。
+  int? get _effectiveSongCount {
+    // 他人歌单里同名的「我喜欢」不参与，只修正自己的收藏歌单。
+    if (widget.readOnly || !_currentPlaylist.isLikedPlaylist) return null;
+    return widget.auth.likedCount;
+  }
+
   bool get _isInLibrary =>
       !widget.readOnly && widget.auth.isPlaylistInLibrary(_currentPlaylist);
 
@@ -1327,6 +1337,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                               stretchModes: const [StretchMode.zoomBackground],
                               background: _HeroHeader(
                                 info: _info ?? widget.playlist,
+                                songCountOverride: _effectiveSongCount,
                               ),
                             ),
                     ),
@@ -1354,7 +1365,9 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                         child: _Actions(
                           count: _allSongsLoaded
                               ? _songs.length
-                              : _info?.songCount ?? _songs.length,
+                              : _effectiveSongCount ??
+                                    _info?.songCount ??
+                                    _songs.length,
                           loadedCount: _songs.length,
                           sortLabel: _sortModeLabel,
                           onSortTap: () => _showSortSheet(context),
@@ -1592,9 +1605,11 @@ class _ActionOptionTile extends StatelessWidget {
 }
 
 class _HeroHeader extends StatelessWidget {
-  const _HeroHeader({required this.info});
+  const _HeroHeader({required this.info, this.songCountOverride});
 
   final PlaylistSummary info;
+  /// 收藏歌单用真实收藏数覆盖接口总数，其余歌单为 null。
+  final int? songCountOverride;
 
   @override
   Widget build(BuildContext context) {
@@ -1637,7 +1652,7 @@ class _HeroHeader extends StatelessWidget {
                       Text(
                         info.subtitle?.trim().isNotEmpty == true
                             ? info.subtitle!
-                            : _detailMeta(info),
+                            : _detailMeta(info, songCount: songCountOverride),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -1647,7 +1662,7 @@ class _HeroHeader extends StatelessWidget {
                       ),
                       const SizedBox(height: 5),
                       Text(
-                        _detailMeta(info),
+                        _detailMeta(info, songCount: songCountOverride),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -2135,10 +2150,13 @@ class _SongRow extends StatelessWidget {
                                     ),
                               ),
                             ),
-                            if (!selectionMode) ...[
-                              const SizedBox(width: 6),
-                              _DownloadedIndicator(player: player, song: song),
-                            ],
+                            const SizedBox(width: 6),
+                            _DownloadedIndicator(
+                              player: player,
+                              song: song,
+                              // 多选模式下点击整行用于勾选，绿色勾不再单独响应。
+                              interactive: !selectionMode,
+                            ),
                           ],
                         ),
                       ],
@@ -2221,10 +2239,15 @@ class _SongRow extends StatelessWidget {
 }
 
 class _DownloadedIndicator extends StatelessWidget {
-  const _DownloadedIndicator({required this.player, required this.song});
+  const _DownloadedIndicator({
+    required this.player,
+    required this.song,
+    this.interactive = true,
+  });
 
   final PlayerController player;
   final Song song;
+  final bool interactive;
 
   @override
   Widget build(BuildContext context) {
@@ -2237,25 +2260,26 @@ class _DownloadedIndicator extends StatelessWidget {
         if (!downloads.isDownloaded(song)) {
           return const SizedBox.shrink();
         }
-        return Tooltip(
-          message: '已下载',
-          child: Material(
-            color: const Color(0x1A24C768),
-            shape: const CircleBorder(),
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: () => Toast.info('已下载，播放时将优先使用本地文件'),
-              child: const SizedBox.square(
-                dimension: 16,
-                child: Icon(
-                  Icons.check_rounded,
-                  size: 12,
-                  color: Color(0xFF24C768),
-                ),
-              ),
-            ),
+        const badge = SizedBox.square(
+          dimension: 16,
+          child: Icon(
+            Icons.check_rounded,
+            size: 12,
+            color: Color(0xFF24C768),
           ),
         );
+        final circle = Material(
+          color: const Color(0x1A24C768),
+          shape: const CircleBorder(),
+          child: interactive
+              ? InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => Toast.info('已下载，播放时将优先使用本地文件'),
+                  child: badge,
+                )
+              : badge,
+        );
+        return Tooltip(message: '已下载', child: circle);
       },
     );
   }
@@ -2381,16 +2405,17 @@ class _SortOptionTile extends StatelessWidget {
   }
 }
 
-String _detailMeta(PlaylistSummary info) {
+String _detailMeta(PlaylistSummary info, {int? songCount}) {
+  final count = songCount ?? info.songCount;
   if (info.isCollectedAlbum) {
-    if (info.songCount != null) {
-      return '${info.songCount} 首歌';
+    if (count != null) {
+      return '$count 首歌';
     }
     return '新专辑';
   }
   final parts = <String>[];
-  if (info.songCount != null) {
-    parts.add('${info.songCount} 首歌');
+  if (count != null) {
+    parts.add('$count 首歌');
   }
   if (info.playCount != null) {
     parts.add(_playCount(info.playCount));
