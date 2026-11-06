@@ -662,18 +662,21 @@ class _LandscapeHeader extends StatelessWidget {
                   ],
                 ),
               ),
-              _LandscapeHeaderButton(
-                tooltip: liked ? '取消喜欢' : '喜欢',
-                size: compact ? 38 : 44,
-                iconSize: compact ? 22 : 24,
-                onPressed: song.source == SongSource.kugou
-                    ? () => auth.toggleLike(song)
-                    : null,
-                icon: liked
-                    ? Icons.favorite_rounded
-                    : Icons.favorite_border_rounded,
-              ),
-              SizedBox(width: compact ? 6 : 8),
+              // 云盘曲目收不进「收藏」歌单，直接不给这个入口。
+              if (!song.isCloudDrive) ...[
+                _LandscapeHeaderButton(
+                  tooltip: liked ? '取消喜欢' : '喜欢',
+                  size: compact ? 38 : 44,
+                  iconSize: compact ? 22 : 24,
+                  onPressed: song.source == SongSource.kugou
+                      ? () => auth.toggleLike(song)
+                      : null,
+                  icon: liked
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                ),
+                SizedBox(width: compact ? 6 : 8),
+              ],
               _LandscapeHeaderButton(
                 tooltip: '更多',
                 size: compact ? 38 : 44,
@@ -1368,17 +1371,19 @@ class _TopBar extends StatelessWidget {
                   ],
                 ),
               ),
-              _GlassIconButton(
-                tooltip: liked ? '取消喜欢' : '喜欢',
-                size: buttonSize,
-                onPressed: song.source == SongSource.kugou
-                    ? () => auth.toggleLike(song)
-                    : null,
-                icon: liked
-                    ? Icons.favorite_rounded
-                    : Icons.favorite_border_rounded,
-              ),
-              SizedBox(width: compact ? 4 : 8),
+              if (!song.isCloudDrive) ...[
+                _GlassIconButton(
+                  tooltip: liked ? '取消喜欢' : '喜欢',
+                  size: buttonSize,
+                  onPressed: song.source == SongSource.kugou
+                      ? () => auth.toggleLike(song)
+                      : null,
+                  icon: liked
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                ),
+                SizedBox(width: compact ? 4 : 8),
+              ],
               _GlassIconButton(
                 tooltip: '更多',
                 size: buttonSize,

@@ -167,16 +167,22 @@ class CarLeftPlayerPanel extends StatelessWidget {
                           ],
                         ),
                       ),
-                      IconButton(
-                        onPressed: song.source == SongSource.kugou
-                            ? () => auth.toggleLike(song)
-                            : null,
-                        icon: Icon(
-                          liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                          color: liked ? Colors.redAccent : colorScheme.onSurfaceVariant,
-                          size: 26,
+                      // 云盘曲目收不进「收藏」歌单，不给这个入口。
+                      if (!song.isCloudDrive)
+                        IconButton(
+                          onPressed: song.source == SongSource.kugou
+                              ? () => auth.toggleLike(song)
+                              : null,
+                          icon: Icon(
+                            liked
+                                ? Icons.favorite_rounded
+                                : Icons.favorite_border_rounded,
+                            color: liked
+                                ? Colors.redAccent
+                                : colorScheme.onSurfaceVariant,
+                            size: 26,
+                          ),
                         ),
-                      ),
                     ],
                   ),
                   SizedBox(height: titleGap),

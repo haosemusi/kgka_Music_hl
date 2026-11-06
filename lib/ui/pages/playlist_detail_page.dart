@@ -855,14 +855,26 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     return widget.auth.findUserPlaylist(_currentPlaylist) ?? _currentPlaylist;
   }
 
-  /// 收藏歌单展示的歌曲数：以收藏集合里真实存在的歌曲为准。
+  /// 自己的收藏歌单。
   ///
-  /// 歌单接口的总数会把收藏失败、已下架（hash 为空）的条目也算进去，
-  /// 那样会大于本页列表实际列出的数量，也和「我的」页对不上。
-  int? get _effectiveSongCount {
-    // 他人歌单里同名的「我喜欢」不参与，只修正自己的收藏歌单。
-    if (widget.readOnly || !_currentPlaylist.isLikedPlaylist) return null;
-    return widget.auth.likedCount;
+  /// `/playlist/detail` 不带 `is_def`，`_info` 上认不出收藏身份，
+  /// 所以要再看进入本页时的歌单条目和「我的」歌单列表里的同一项。
+  bool get _isOwnLikedList {
+    if (widget.readOnly) return false;
+    return _currentPlaylist.isLikedPlaylist ||
+        widget.playlist.isLikedPlaylist ||
+        _libraryPlaylist.isLikedPlaylist;
+  }
+
+  /// 顶部与操作行统一使用的歌曲数。
+  ///
+  /// 完整加载后直接以本页列出的条数为准；还没加载完时，收藏歌单用收藏集合里
+  /// 真实存在的数量。歌单接口的总数会把收藏失败、已下架（hash 为空）的条目
+  /// 也算进去，那样顶部会比底下实际列表多几首。
+  int? get _displaySongCount {
+    if (_allSongsLoaded) return _songs.length;
+    if (_isOwnLikedList) return widget.auth.likedCount;
+    return null;
   }
 
   bool get _isInLibrary =>
@@ -1338,7 +1350,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                               stretchModes: const [StretchMode.zoomBackground],
                               background: _HeroHeader(
                                 info: _info ?? widget.playlist,
-                                songCountOverride: _effectiveSongCount,
+                                songCountOverride: _displaySongCount,
                               ),
                             ),
                     ),
@@ -1364,11 +1376,9 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                         ),
                       SliverToBoxAdapter(
                         child: _Actions(
-                          count: _allSongsLoaded
-                              ? _songs.length
-                              : _effectiveSongCount ??
-                                    _info?.songCount ??
-                                    _songs.length,
+                          count: _displaySongCount ??
+                              _info?.songCount ??
+                              _songs.length,
                           loadedCount: _songs.length,
                           sortLabel: _sortModeLabel,
                           onSortTap: () => _showSortSheet(context),
