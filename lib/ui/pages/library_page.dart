@@ -49,7 +49,8 @@ class LibraryPage extends StatefulWidget {
 class _LibraryPageState extends State<LibraryPage> {
   // 折叠状态管理（改 tab 为折叠）
   bool _expandedCreated = true;
-  bool _expandedCollected = true;
+  // null 表示跟随数量：有收藏歌单时展开，数量为 0 时保持折叠。
+  bool? _expandedCollected;
   bool _expandedAlbums = false;
   bool _expandedCloud = true;
 
@@ -464,9 +465,10 @@ class _LibraryPageState extends State<LibraryPage> {
                       child: _CollapsibleSection(
                         title: '我收藏的歌单',
                         count: collected.length,
-                        isExpanded: _expandedCollected,
+                        isExpanded: _expandedCollected ?? collected.isNotEmpty,
                         onToggle: () => setState(
-                            () => _expandedCollected = !_expandedCollected),
+                            () => _expandedCollected =
+                                !(_expandedCollected ?? collected.isNotEmpty)),
                         child: sortedCollected.isEmpty
                             ? const _EmptyGroup()
                             : _PlaylistGroup(

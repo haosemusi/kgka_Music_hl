@@ -24,6 +24,7 @@ class _PendingTask {
     required this.url,
     required this.completer,
     this.onProgress,
+    this.fileExtension,
   });
 
   final DownloadTaskKind kind;
@@ -32,6 +33,8 @@ class _PendingTask {
   final String url;
   final Completer<String> completer;
   final void Function(int received, int total)? onProgress;
+  /// 落盘扩展名覆盖（云盘歌曲用文件真实格式，其余为 null 按音质推断）。
+  final String? fileExtension;
 }
 
 /// 歌曲下载服务（IO 层 + dio 下载 + 并发管理）。
@@ -148,14 +151,30 @@ class DownloadService {
   }
 
   /// 文件命名：{歌手}-{歌曲名}.{ext}
-  String fileNameFor(Song song, AudioQuality quality) {
-    final ext = quality == AudioQuality.lossless ? 'flac' : 'mp3';
+  ///
+  /// [fileExtension] 用于云盘歌曲：上传文件是什么格式就落盘成什么扩展名，
+  /// 不能按当前音质设置推断。
+  String fileNameFor(
+    Song song,
+    AudioQuality quality, {
+    String? fileExtension,
+  }) {
+    final ext = _isValidExtension(fileExtension)
+        ? fileExtension!.toLowerCase()
+        : (quality == AudioQuality.lossless ? 'flac' : 'mp3');
     final safeArtist = _sanitizeFileName(song.artist);
     final safeTitle = _sanitizeFileName(song.title);
     final name = (safeArtist.isNotEmpty && safeTitle.isNotEmpty)
         ? '$safeArtist-$safeTitle'
         : song.hash.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '');
     return '$name.$ext';
+  }
+
+  /// 只接受常见音频扩展名，避免服务端路径里的奇怪片段污染文件名。
+  bool _isValidExtension(String? ext) {
+    if (ext == null) return false;
+    return const {'mp3', 'flac', 'm4a', 'aac', 'wav', 'ogg', 'ape'}
+        .contains(ext.toLowerCase());
   }
 
   /// 移除文件名中不合法的字符。
@@ -183,6 +202,7 @@ class DownloadService {
     required AudioQuality quality,
     required String url,
     required void Function(int received, int total) onProgress,
+    String? fileExtension,
   }) async {
     final completer = Completer<String>();
     final task = _PendingTask(
@@ -192,6 +212,7 @@ class DownloadService {
       url: url,
       completer: completer,
       onProgress: onProgress,
+      fileExtension: fileExtension,
     );
     _enqueue(task);
     return completer.future;
@@ -252,7 +273,11 @@ class DownloadService {
 
   Future<String> _executeTask(_PendingTask task) async {
     final key = cacheKeyFor(task.song, task.quality);
-    final fileName = fileNameFor(task.song, task.quality);
+    final fileName = fileNameFor(
+      task.song,
+      task.quality,
+      fileExtension: task.fileExtension,
+    );
     final dir = task.kind == DownloadTaskKind.download
         ? await downloadDir()
         : await playCacheDir();

@@ -116,8 +116,13 @@ class _MiniPlayerState extends State<MiniPlayer>
             return const SizedBox.shrink();
           }
 
+          // heightFactor 必须收窄：作为 Scaffold 的 bottomNavigationBar 时，
+          // Align 默认会把父级给的全部高度占满，导航条因此变成整屏高，
+          // Scaffold 随之把这份高度算进 body 的 MediaQuery.padding.bottom，
+          // ListView 会自动按它加底部内边距，列表末尾就出现一大片空白。
           return Align(
             alignment: Alignment.bottomCenter,
+            heightFactor: 1,
             child: Container(
               width: 58,
               height: 58,

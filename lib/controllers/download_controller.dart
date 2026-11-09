@@ -371,11 +371,20 @@ class DownloadController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final playUrl = await _api.songUrl(song, quality: quality);
+      final playUrl = await _resolveDownloadUrl(song, quality);
       if (playUrl.url.isEmpty) {
-        throw Exception('这首歌暂时没有可播放地址');
+        throw Exception(
+          song.isCloudDrive
+              ? '云盘地址解析失败（服务端未返回下载地址）'
+              : '这首歌暂时没有可播放地址',
+        );
       }
-      await _transfer(song, quality, playUrl.url);
+      await _transfer(
+        song,
+        quality,
+        playUrl.url,
+        fileExtension: _fileExtensionFor(song, playUrl.url),
+      );
     } catch (error) {
       _downloads[key] = DownloadEntry(
         song: song,
@@ -424,20 +433,29 @@ class DownloadController extends ChangeNotifier {
         notifyListeners();
 
         try {
-          final playUrl = await _api.songUrl(song, quality: quality);
+          final playUrl = await _resolveDownloadUrl(song, quality);
           if (playUrl.url.isEmpty) {
             _downloads[key] = DownloadEntry(
               song: song,
               quality: quality,
               status: DownloadStatus.failed,
-              error: '这首歌暂时没有可播放地址',
+              error: song.isCloudDrive
+                  ? '云盘地址解析失败（服务端未返回下载地址）'
+                  : '这首歌暂时没有可播放地址',
             );
             notifyListeners();
             failed++;
             continue;
           }
           enqueued++;
-          unawaited(_transfer(song, quality, playUrl.url));
+          unawaited(
+            _transfer(
+              song,
+              quality,
+              playUrl.url,
+              fileExtension: _fileExtensionFor(song, playUrl.url),
+            ),
+          );
         } catch (error) {
           _downloads[key] = DownloadEntry(
             song: song,
@@ -463,13 +481,19 @@ class DownloadController extends ChangeNotifier {
   }
 
   /// 文件传输（播放地址已解析）。成功后写入已下载索引，失败进入失败列表。
-  Future<void> _transfer(Song song, AudioQuality quality, String url) async {
+  Future<void> _transfer(
+    Song song,
+    AudioQuality quality,
+    String url, {
+    String? fileExtension,
+  }) async {
     final key = _downloadKey(song);
     try {
       final path = await _service.download(
         song: song,
         quality: quality,
         url: url,
+        fileExtension: fileExtension,
         onProgress: (received, total) {
           final progress = total > 0 ? received / total : 0.0;
           final entry = _downloads[key];
@@ -498,6 +522,35 @@ class DownloadController extends ChangeNotifier {
       );
       notifyListeners();
     }
+  }
+
+  /// 解析下载地址。
+  ///
+  /// 云盘歌曲只能由 `/user/cloud/url` 取址，和 [PlayerController] 播放时的
+  /// 解析口径保持一致；用普通 `/song/url` 查云盘曲目会返回空地址，
+  /// 表现为「云盘歌曲无法下载」。
+  Future<PlayUrl> _resolveDownloadUrl(Song song, AudioQuality quality) async {
+    if (!song.isCloudDrive) {
+      return _api.songUrl(song, quality: quality);
+    }
+    final cloud = await _api.cloudSongUrl(song);
+    if (cloud.url.isNotEmpty) return cloud;
+    // 个别云盘条目在云盘接口上解析不到地址，回退普通取址再试一次。
+    try {
+      return await _api.songUrl(song, quality: quality);
+    } catch (_) {
+      return cloud;
+    }
+  }
+
+  /// 云盘文件的实际格式由用户上传的文件决定，取地址里的扩展名落盘；
+  /// 普通歌曲仍按音质设置推断。非法扩展名由服务层忽略。
+  String? _fileExtensionFor(Song song, String url) {
+    if (!song.isCloudDrive) return null;
+    final path = Uri.tryParse(url)?.path ?? '';
+    final dot = path.lastIndexOf('.');
+    if (dot < 0 || dot == path.length - 1) return null;
+    return path.substring(dot + 1).toLowerCase();
   }
 
   /// 移除一条失败记录（从失败列表清除）。

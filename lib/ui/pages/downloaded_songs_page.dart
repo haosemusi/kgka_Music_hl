@@ -7,9 +7,11 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../controllers/auth_controller.dart';
 import '../../controllers/download_controller.dart';
 import '../../controllers/player_controller.dart';
+import '../../core/api_client.dart';
 import '../../models/music_models.dart';
 import '../../services/music_api.dart';
 import '../widgets/artwork.dart';
+import '../widgets/toast.dart';
 import '../adaptive_layout.dart';
 import '../widgets/liquid_glass_ui.dart';
 import '../widgets/mini_player.dart';
@@ -121,7 +123,12 @@ class _DownloadedList extends StatelessWidget {
       builder: (context, _) {
         final entries = downloads.downloadEntries;
         final completed =
-            entries.where((e) => e.status == DownloadStatus.downloaded).toList();
+            _orderByDownloadTime(
+              entries.where((e) => e.status == DownloadStatus.downloaded),
+            );
+        // 整页已下载歌曲构成播放队列：点任意一首都会替换掉原有队列，
+        // 不再把之前其他歌单的歌继续排在后面。
+        final playQueue = completed.map((entry) => entry.song).toList();
         final downloading =
             entries.where((e) => e.status == DownloadStatus.downloading).toList();
         final failed =
@@ -158,6 +165,7 @@ class _DownloadedList extends StatelessWidget {
                     auth: auth,
                     player: player,
                     downloads: downloads,
+                    playQueue: playQueue,
                   )),
             ],
             if (downloading.isNotEmpty) ...[
@@ -225,6 +233,7 @@ class _DownloadedSongRow extends StatelessWidget {
     required this.auth,
     required this.player,
     required this.downloads,
+    required this.playQueue,
   });
 
   final DownloadEntry entry;
@@ -232,6 +241,8 @@ class _DownloadedSongRow extends StatelessWidget {
   final AuthController auth;
   final PlayerController player;
   final DownloadController downloads;
+  /// 整页已下载歌曲，点任一首都以它作为播放队列。
+  final List<Song> playQueue;
 
   @override
   Widget build(BuildContext context) {
@@ -262,21 +273,55 @@ class _DownloadedSongRow extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            icon: const Icon(Icons.play_circle_fill_rounded),
-            color: colorScheme.primary,
-            onPressed: () {
-              player.playSong(song);
-            },
-          ),
+          // 云盘曲目不能收藏到「收藏」歌单（服务端不接受），这里不给收藏入口。
+          if (!song.isCloudDrive)
+            _FavoriteToggle(
+              auth: auth,
+              song: song,
+              onToggle: () => _toggleLike(song),
+            ),
           IconButton(
             icon: const Icon(Icons.more_vert_rounded),
             onPressed: () => _showActions(context, song),
           ),
         ],
       ),
-      onTap: () => player.playSong(song),
+      onTap: () => player.playSong(song, queue: List<Song>.of(playQueue)),
     );
+  }
+
+  /// 收藏/取消收藏，行为与云盘页保持一致。
+  Future<void> _toggleLike(Song song) async {
+    if (!auth.isLoggedIn) {
+      Toast.show('请先登录后再收藏');
+      return;
+    }
+    if (auth.likedPlaylist == null) {
+      Toast.error('暂未找到收藏歌单，请稍后重试');
+      return;
+    }
+    final liked = auth.isLiked(song);
+    try {
+      final done = await auth.toggleLike(song);
+      if (!done) {
+        // 服务端没把这首歌真正写进收藏歌单（云盘曲目常见），不点亮本地图标。
+        Toast.error(
+          song.isCloudDrive
+              ? '云盘歌曲暂时不支持收藏到「收藏」歌单'
+              : '收藏未生效，请稍后重试',
+        );
+        return;
+      }
+      Toast.success(liked ? '已取消收藏' : '已收藏到「收藏」歌单');
+    } catch (error) {
+      // ApiException 自带可读文案；其余异常统一成通用提示，避免把
+      // "Bad state:"、"Exception:" 这类前缀直接甩给用户。
+      Toast.error(
+        error is ApiException
+            ? '收藏失败：${error.message}'
+            : '收藏失败，请稍后重试',
+      );
+    }
   }
 
   void _showActions(BuildContext context, Song song) {
@@ -288,6 +333,19 @@ class _DownloadedSongRow extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (song.hash.isNotEmpty && !song.isCloudDrive)
+              ListTile(
+                leading: Icon(
+                  auth.isLiked(song)
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                ),
+                title: Text(auth.isLiked(song) ? '取消收藏' : '收藏'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _toggleLike(song);
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.delete_outline_rounded),
               title: const Text('删除下载'),
@@ -350,6 +408,43 @@ class _DownloadedSongRow extends StatelessWidget {
         await launchUrl(contentUri, mode: LaunchMode.externalApplication);
       }
     }
+  }
+}
+
+/// 收藏状态按钮：已收藏显示实心，未收藏显示空心。
+class _FavoriteToggle extends StatelessWidget {
+  const _FavoriteToggle({
+    required this.auth,
+    required this.song,
+    required this.onToggle,
+  });
+
+  final AuthController auth;
+  final Song song;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    if (song.hash.isEmpty) return const SizedBox.shrink();
+
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return AnimatedBuilder(
+      animation: auth,
+      builder: (context, _) {
+        final liked = auth.isLiked(song);
+        return IconButton(
+          tooltip: liked ? '取消收藏' : '收藏',
+          onPressed: onToggle,
+          icon: Icon(
+            liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+            color: liked ? Colors.redAccent : colorScheme.outline,
+            size: 24,
+          ),
+          visualDensity: VisualDensity.compact,
+        );
+      },
+    );
   }
 }
 
@@ -566,4 +661,36 @@ String _formatBytes(int bytes) {
   if (bytes < 1024) return '$bytes B';
   if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
   return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
+
+/// 已下载歌曲的展示顺序：只按下载时间由新到旧，不再参考收藏歌单的次序。
+///
+/// 时间相同（或旧索引里没有下载时间）的条目保持原有次序；没有时间的排在最后。
+List<DownloadEntry> _orderByDownloadTime(Iterable<DownloadEntry> entries) {
+  final list = entries.toList();
+  if (list.length < 2) return list;
+
+  // 排序键唯一，规避 List.sort 不保证稳定的问题。
+  final decorated = [
+    for (var i = 0; i < list.length; i++)
+      (
+        time: list[i].downloadedAt,
+        originalIndex: i,
+        entry: list[i],
+      ),
+  ];
+  decorated.sort((a, b) {
+    final left = a.time;
+    final right = b.time;
+    if (left != null && right != null) {
+      final byTime = right.compareTo(left);
+      if (byTime != 0) return byTime;
+    } else if (left != null) {
+      return -1;
+    } else if (right != null) {
+      return 1;
+    }
+    return a.originalIndex.compareTo(b.originalIndex);
+  });
+  return [for (final item in decorated) item.entry];
 }

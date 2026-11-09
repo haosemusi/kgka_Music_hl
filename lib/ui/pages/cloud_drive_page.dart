@@ -10,6 +10,7 @@ import '../../services/music_api.dart';
 import '../widgets/artwork.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/now_playing_badge.dart';
+import '../widgets/downloaded_indicator.dart';
 import '../widgets/song_action_sheets.dart';
 import 'artist_detail_page.dart';
 import '../adaptive_layout.dart';
@@ -508,15 +509,27 @@ class _CloudSongRow extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 3),
-                      Text(
-                        song.artist,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: active
-                              ? activeColor.withValues(alpha: .72)
-                              : colorScheme.onSurfaceVariant,
-                        ),
+                      Row(
+                        children: [
+                          Flexible(
+                            fit: FlexFit.loose,
+                            child: Text(
+                              song.artist,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(
+                                    color: active
+                                        ? activeColor.withValues(alpha: .72)
+                                        : colorScheme.onSurfaceVariant,
+                                  ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          DownloadedIndicator(player: player, song: song),
+                        ],
                       ),
                     ],
                   ),
